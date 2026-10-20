@@ -1,0 +1,20 @@
+# .NET build output
+**/bin/
+**/obj/
+/dist/
+
+# Generated test data, captures, caches, and downloaded tools
+/test-results/
+/trace-tests/.dotnet/
+/trace-tests/.nuget/
+/trace-tests/etw-bin/
+/trace-tests/game-runs/
+/trace-tests/runs/
+/trace-tests/tools/
+/trace-tests/*.json
+
+# Local IDE and Python files
+/.vs/
+**/__pycache__/
+*.user
+*.suo
