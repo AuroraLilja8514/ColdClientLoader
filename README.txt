@@ -1,8 +1,9 @@
 ColdClientManager · 游戏存档同步与非 Steam 环境启动（Windows x64 原型）
 
-直接运行 dist\ColdClientManager\ColdClientManager.exe。
+GitHub Release 便携版：解压整个 ZIP，运行 ColdClientManager\ColdClientManager.exe；已包含 .NET 运行时，无需安装。
+源码通过 Build.ps1 构建的版本位于 dist\ColdClientManager\ColdClientManager.exe，需要 .NET 10 Windows Desktop Runtime（x64）。
 请从资源管理器运行，避免继承 Codex 等打包应用的存档目录虚拟化环境。
-运行需要 .NET 10 Windows Desktop Runtime（x64）。
+便携版的配置、登录和备份仍保存在下文的用户目录；更新时解压到新的程序目录即可复用，不要随发布包分享用户数据。
 不需要安装 Steam、Procmon、Sandboxie 或 Windows Performance Toolkit。
 
 使用方法
@@ -11,8 +12,7 @@ ColdClientManager · 游戏存档同步与非 Steam 环境启动（Windows x64 �
 2. 在设置窗口选择“直接启动”或“ColdClientLoader”。后者还需选择现有的 loader exe，其同目录应有 steamclient.dll、steamclient64.dll，建议也有两个 GameOverlayRenderer DLL。
    启动器的 x86/x64 架构应与游戏相符。Steam 安装清单可读时，会尝试填入 AppID、SteamID 和名称；否则手动填写。
    SteamID 应与原存档使用的账号一致，避免游戏按账号切换到另一个存档目录。使用 ColdClientLoader 前先退出其他 Steam / loader。
-   本应用不附带 ColdClientLoader。现有已验证的 x64 组件位于：
-   E:\gemini-test\ColdClientManager\trace-tests\tools\gbe-20260927\release\steamclient_experimental\steamclient_loader_x64.exe
+   本应用不附带 ColdClientLoader，请选择自己已有组件目录中的 steamclient_loader_x64.exe 或对应的 x86 版本。
 3. 可在设置窗口点击“保存并查找存档”，先保存条目再启动游戏发现存档。ETW 采集器需要一次 UAC；游戏仍按本应用当前的普通用户权限运行。
    在游戏中产生一次进度并正常退出。应用会等待整个进程树退出，再展示候选目录。
 4. 候选目录默认全部不勾选。勾选确认的目录后，点击主页面“编辑设置”，为新增规则填写“同步目标路径”。
@@ -92,7 +92,7 @@ OBS 游戏录制与命令行
 设置备份以 Windows 当前用户加密，存放于 %LOCALAPPDATA%\ColdClientManager\recording，不写入安装目录。
 异常中断后先 stop；如果提示设置未恢复，退出所有 OBS 后执行 .\Record-Game.ps1 recover。未恢复前会阻止开始新的录制。
 
-未安装 OBS 或希望使用专用便携版时，在 dist\ColdClientManager 目录打开普通 PowerShell，首次运行：
+未安装 OBS 或希望使用专用便携版时，在 ColdClientManager.exe 所在目录打开普通 PowerShell，首次运行：
   .\Record-Game.ps1 install
 这会下载并校验官方 Windows x64 压缩包，安装到 %LOCALAPPDATA%\ColdClientManager\obs。
 已有该版本官方压缩包时，可离线安装：
@@ -139,6 +139,7 @@ Job Object 会跟踪普通子孙进程，即使启动器先退出；已存在的
 
 构建与模拟测试（不启动真实游戏）
 - 安装 .NET 10 SDK 后：pwsh -NoProfile -File Build.ps1
+- 制作包含运行时的便携 ZIP：pwsh -NoProfile -File Release.ps1 -Version 0.1.0；完整发布步骤见 RELEASING.md。
 - 普通测试：pwsh -NoProfile -File Test.ps1
 - 应用列表三种操作的模拟测试：从普通桌面终端运行 pwsh -NoProfile -File Test.ps1 -LaunchModes
 - ETW 模拟测试：pwsh -NoProfile -File Test.ps1 -Etw

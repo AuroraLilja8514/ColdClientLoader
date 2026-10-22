@@ -1,4 +1,7 @@
 This application references Microsoft.Diagnostics.Tracing.TraceEvent 4.0.0 and its NuGet dependencies.
+The self-contained portable release also bundles the unmodified .NET and Windows Desktop runtimes.
+Their licenses and .NET third-party notices are included in licenses/dotnet-LICENSE.txt,
+licenses/dotnet-THIRD-PARTY-NOTICES.txt, and licenses/windowsdesktop-LICENSE.txt.
 TraceEvent / PerfView: https://github.com/microsoft/perfview (MIT license)
 .NET diagnostic tools: https://github.com/dotnet/diagnostics (MIT license)
 Microsoft.Extensions libraries: https://github.com/dotnet/runtime (MIT license)
