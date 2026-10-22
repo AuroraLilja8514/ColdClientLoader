@@ -89,7 +89,7 @@ internal static partial class Tests
             if (args.Contains("--etw")) TestCapture(root, mock).GetAwaiter().GetResult();
             else if (args.Contains("--cold")) TestRealCold(root, mock, args[Array.IndexOf(args, "--cold") + 1]).GetAwaiter().GetResult();
             else if (args.Contains("--permissions")) TestPermissions(root, args[Array.IndexOf(args, "--permissions") + 1]).GetAwaiter().GetResult();
-            else if (!args.Contains("--ui") && !args.Contains("--recover")) { TestSync(root); TestCandidates(); TestColdPreparation(root, mock); TestAchievements(root); TestRecordingOptions(root); TestProcessTree(root, mock).GetAwaiter().GetResult(); }
+            else if (!args.Contains("--ui") && !args.Contains("--recover")) { TestSync(root); TestDirectionalSync(root); TestCandidates(); TestColdPreparation(root, mock); TestAchievements(root); TestRecordingOptions(root); TestProcessTree(root, mock).GetAwaiter().GetResult(); }
             Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
             return 0;
         }

@@ -9,7 +9,9 @@ internal static partial class Tests
         {
             string state = Path.Combine(root, action), fixture = Path.Combine(state, "fixture"), shared = Path.Combine(state, "shared");
             string localSave = Path.Combine(fixture, "profile", "saves", "slot1.sav"), sharedSave = Path.Combine(shared, "slot1.sav");
+            string observed = Path.Combine(fixture, "launch-input.txt");
             Write(sharedSave, "remote-progress");
+            if (action == "同步并启动") Write(localSave, "unsynchronized-local-progress");
             var profile = new GameProfile { Name = "launch mode fixture", Executable = mock, WorkingDirectory = Path.GetDirectoryName(mock)!,
                 Arguments = "launch-mode \"" + fixture + "\"", Rules = [new SyncRule { LocalPath = Path.GetDirectoryName(localSave)!, SharedPath = shared, Patterns = "*.sav;*.dat" }] };
             Storage.Write(Path.Combine(state, "profiles.json"), new[] { profile });
@@ -17,6 +19,7 @@ internal static partial class Tests
             Button? selectedAction = null;
             bool clicked = false;
             bool disabledDuringRun = false;
+            bool targetChangedDuringPlay = false;
             IEnumerable<Control> Descendants(Control parent)
             {
                 foreach (Control child in parent.Controls)
@@ -27,6 +30,12 @@ internal static partial class Tests
             }
             using var timer = new System.Windows.Forms.Timer { Interval = 50 };
             timer.Tick += (_, _) => {
+                if (action == "同步并启动" && !targetChangedDuringPlay && File.Exists(observed))
+                {
+                    Write(sharedSave, "target-changed-during-play");
+                    Write(Path.Combine(shared, "target-only.sav"), "target-only");
+                    targetChangedDuringPlay = true;
+                }
                 if (clicked && selectedAction!.Enabled) { timer.Stop(); form.Close(); }
             };
             form.Shown += (_, _) => {
@@ -37,12 +46,15 @@ internal static partial class Tests
             };
             Application.Run(form);
             if (action != "仅同步") Assert(disabledDuringRun, action + " prevents changing or editing the selected application while running");
-            string observed = Path.Combine(fixture, "launch-input.txt");
             if (action == "同步并启动")
             {
                 Assert(File.ReadAllText(observed) == "remote-progress", "sync-and-launch pulls the saved configuration's files before launching");
                 Assert(File.ReadAllText(sharedSave) == "grandchild-final" && File.Exists(Path.Combine(shared, "sub", "slot3.dat")),
                     "sync-and-launch pushes progress after the entire game process tree exits");
+                Assert(targetChangedDuringPlay && File.ReadAllText(sharedSave) == "grandchild-final",
+                    "post-play automatic copy uses local progress when the target was modified during play");
+                Assert(File.ReadAllText(Path.Combine(shared, "target-only.sav")) == "target-only" && !File.Exists(Path.Combine(Path.GetDirectoryName(localSave)!, "target-only.sav")),
+                    "post-play automatic copy preserves target-only saves without pulling them into the game directory");
             }
             else if (action == "仅同步")
             {

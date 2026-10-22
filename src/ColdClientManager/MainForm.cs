@@ -52,7 +52,7 @@ public sealed class MainForm : Form
         actions.Controls.Add(AsyncButton("仅启动", () => LaunchAsync(false, false)));
         profileActions.AddRange(actions.Controls.Cast<Control>());
         details.Controls.Add(actions, 0, 3);
-        details.Controls.Add(new Label { Text = "同步并启动：启动前、退出后各同步一次存档。\n仅同步不启动；仅启动不处理存档。", Dock = DockStyle.Fill, Padding = new Padding(3, 5, 0, 0) }, 0, 4);
+        details.Controls.Add(new Label { Text = "同步并启动：先从目标拉取存档，退出后写回目标。\n仅同步：双向比较；仅启动不处理存档。", Dock = DockStyle.Fill, Padding = new Padding(3, 5, 0, 0) }, 0, 4);
         var manage = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         manage.Controls.Add(AsyncButton("编辑设置", () => EditProfileAsync(Current!)));
         manage.Controls.Add(Button("打开备份目录", () => {
@@ -146,16 +146,16 @@ public sealed class MainForm : Form
     }
     bool AskElevation() => MessageBox.Show(this, "选定的存档目录拒绝访问。是否通过 UAC 只为本次同步请求管理员权限？游戏仍以普通权限启动，应用不会修改目录所有权或权限。", "目录访问权限", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
 
-    async Task SynchronizeAsync(bool showCompletion)
+    async Task SynchronizeAsync(bool showCompletion, SyncDirection direction = SyncDirection.Both)
     {
         var p = Current ?? throw new InvalidOperationException("请先添加应用。");
         if (p.Rules.Count == 0) { if (showCompletion) Log("尚未选择同步目录。"); return; }
         SyncPlan plan; bool elevated = false;
-        try { plan = await Task.Run(() => SyncEngine.Plan(p, dataRoot)); }
+        try { plan = await Task.Run(() => SyncEngine.Plan(p, dataRoot, direction)); }
         catch (UnauthorizedAccessException)
         {
             if (!AskElevation()) throw new OperationCanceledException();
-            plan = (await Program.ElevatedSync(p, dataRoot, null)).Plan!; elevated = true;
+            plan = (await Program.ElevatedSync(p, dataRoot, null, direction)).Plan!; elevated = true;
         }
         if (plan.Items.Any(i => i.Action == "Conflict"))
         {
@@ -168,7 +168,7 @@ public sealed class MainForm : Form
         {
             if (!AskElevation()) throw new OperationCanceledException();
             // A prior partial copy invalidates the plan; rebuilding it avoids applying stale choices.
-            var fresh = (await Program.ElevatedSync(p, dataRoot, null)).Plan!;
+            var fresh = (await Program.ElevatedSync(p, dataRoot, null, direction)).Plan!;
             if (fresh.Items.Any(i => i.Action == "Conflict"))
             {
                 using var dialog = new ConflictForm(p, fresh);
@@ -189,7 +189,7 @@ public sealed class MainForm : Form
             throw new IOException("当前继承了打包应用的目录虚拟化环境。请从资源管理器打开本应用，再启动真实游戏，避免存档被写进宿主应用的私有目录。");
         if (synchronizeSaves && !discover && p.Rules.Count == 0 && MessageBox.Show(this, "尚未选择同步目录，本次仅启动游戏。", "没有同步规则", MessageBoxButtons.OKCancel) != DialogResult.OK)
             throw new OperationCanceledException();
-        if (synchronizeSaves) await SynchronizeAsync(false);
+        if (synchronizeSaves) await SynchronizeAsync(false, SyncDirection.TargetToLocal);
         await using var steam = p.ReportSteamPlaytime
             ? (File.Exists(SteamSession.LoginPath(dataRoot)) ? await SteamSession.ConnectAsync(dataRoot) : SteamLoginForm.SignIn(this, dataRoot)) : null;
         if (p.SyncAchievements)
@@ -260,7 +260,7 @@ public sealed class MainForm : Form
             }
             if (registry != null) { try { registry.Dispose(); } catch (Exception ex) { errors.Add(ex); } }
         }
-        if (exited && synchronizeSaves) { try { await SynchronizeAsync(false); } catch (Exception ex) { errors.Add(ex); } }
+        if (exited && synchronizeSaves) { try { await SynchronizeAsync(false, SyncDirection.LocalToTarget); } catch (Exception ex) { errors.Add(ex); } }
         if (exited && p.SyncAchievements)
         {
             try

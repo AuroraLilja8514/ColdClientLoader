@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace ColdClientManager;
 
-public sealed record ElevatedSyncRequest(GameProfile Profile, string DataRoot, SyncPlan? Plan);
+public sealed record ElevatedSyncRequest(GameProfile Profile, string DataRoot, SyncPlan? Plan, SyncDirection Direction = SyncDirection.Both);
 public sealed record ElevatedSyncResult(SyncPlan? Plan, string? Backup, string? Error);
 
 internal static class Program
@@ -19,7 +19,7 @@ internal static class Program
             {
                 var request = Storage.Read<ElevatedSyncRequest>(args[1]);
                 var result = request.Plan == null
-                    ? new ElevatedSyncResult(SyncEngine.Plan(request.Profile, request.DataRoot), null, null)
+                    ? new ElevatedSyncResult(SyncEngine.Plan(request.Profile, request.DataRoot, request.Direction), null, null)
                     : new ElevatedSyncResult(null, SyncEngine.Apply(request.Profile, request.DataRoot, request.Plan), null);
                 Storage.Write(response, result);
             }
@@ -33,10 +33,10 @@ internal static class Program
         catch (Exception ex) { MessageBox.Show(ex.ToString(), "存档同步：发生错误", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 
-    public static async Task<ElevatedSyncResult> ElevatedSync(GameProfile profile, string dataRoot, SyncPlan? plan)
+    public static async Task<ElevatedSyncResult> ElevatedSync(GameProfile profile, string dataRoot, SyncPlan? plan, SyncDirection direction = SyncDirection.Both)
     {
         string path = Path.Combine(dataRoot, "requests", Guid.NewGuid().ToString("N") + ".json");
-        Storage.Write(path, new ElevatedSyncRequest(profile, dataRoot, plan));
+        Storage.Write(path, new ElevatedSyncRequest(profile, dataRoot, plan, direction));
         var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };
         info.ArgumentList.Add("--sync"); info.ArgumentList.Add(path);
         using var helper = Process.Start(info)!;

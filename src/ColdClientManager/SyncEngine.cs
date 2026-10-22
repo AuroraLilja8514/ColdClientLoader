@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 
 namespace ColdClientManager;
 
+public enum SyncDirection { Both, TargetToLocal, LocalToTarget }
+
 public sealed class SyncItem
 {
     public string RuleId { get; set; } = "";
@@ -15,6 +17,7 @@ public sealed class SyncItem
 
 public sealed class SyncPlan
 {
+    public SyncDirection Direction { get; set; }
     public List<SyncItem> Items { get; set; } = [];
     public int Changes => Items.Count(i => i.Action != "Equal");
 }
@@ -117,22 +120,29 @@ public static class SyncEngine
     static string StatePath(GameProfile profile, string dataRoot) => Path.Combine(Storage.ProfileFolder(dataRoot, profile), "baseline.json");
     static string StateKey(SyncRule rule, string relative) => rule.Id + "|" + Normalize(rule.LocalPath).ToUpperInvariant()
         + "|" + Normalize(rule.SharedPath).ToUpperInvariant() + "|" + rule.SingleFile + "|" + rule.Patterns.ToUpperInvariant() + "|" + relative;
-    public static SyncPlan Plan(GameProfile profile, string dataRoot)
+    public static SyncPlan Plan(GameProfile profile, string dataRoot, SyncDirection direction = SyncDirection.Both)
     {
+        if (!Enum.IsDefined(direction)) throw new ArgumentOutOfRangeException(nameof(direction));
         Validate(profile);
         string statePath = StatePath(profile, dataRoot);
         var baseline = File.Exists(statePath) ? new Dictionary<string, string>(Storage.Read<Dictionary<string, string>>(statePath), StringComparer.OrdinalIgnoreCase) : [];
-        var plan = new SyncPlan();
+        var plan = new SyncPlan { Direction = direction };
         foreach (var rule in profile.Rules)
         {
             var local = Snapshot(rule, rule.LocalPath);
             var shared = Snapshot(rule, rule.SharedPath);
-            foreach (string relative in local.Keys.Union(shared.Keys, StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
+            IEnumerable<string> paths = direction switch {
+                SyncDirection.TargetToLocal => shared.Keys,
+                SyncDirection.LocalToTarget => local.Keys,
+                _ => local.Keys.Union(shared.Keys, StringComparer.OrdinalIgnoreCase)
+            };
+            foreach (string relative in paths.Order(StringComparer.OrdinalIgnoreCase))
             {
                 local.TryGetValue(relative, out string? l);
                 shared.TryGetValue(relative, out string? s);
                 baseline.TryGetValue(StateKey(rule, relative), out string? previous);
-                string action = l == s ? "Equal" : l == null ? "Shared" : s == null ? "Local"
+                string action = l == s ? "Equal" : direction == SyncDirection.TargetToLocal ? "Shared"
+                    : direction == SyncDirection.LocalToTarget ? "Local" : l == null ? "Shared" : s == null ? "Local"
                     : l == previous ? "Shared" : s == previous ? "Local" : "Conflict";
                 plan.Items.Add(new SyncItem { RuleId = rule.Id, RelativePath = relative, LocalHash = l, SharedHash = s, Action = action });
             }
@@ -156,7 +166,7 @@ public static class SyncEngine
     public static string Apply(GameProfile profile, string dataRoot, SyncPlan plan)
     {
         // Rebuild from the filesystem: a saved/elevated request must not authorize stale or arbitrary paths.
-        var current = Plan(profile, dataRoot);
+        var current = Plan(profile, dataRoot, plan.Direction);
         if (current.Items.Count != plan.Items.Count || current.Items.Where((item, index) =>
             item.RuleId != plan.Items[index].RuleId || item.RelativePath != plan.Items[index].RelativePath
             || item.LocalHash != plan.Items[index].LocalHash || item.SharedHash != plan.Items[index].SharedHash).Any())
@@ -203,7 +213,7 @@ public static class SyncEngine
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
-        var next = Plan(profile, dataRoot);
+        var next = Plan(profile, dataRoot, plan.Direction);
         if (next.Items.Any(i => i.Action != "Equal")) throw new IOException("同步期间文件再次变化；已保留备份，请重新同步。");
         Storage.Write(StatePath(profile, dataRoot), next.Items.ToDictionary(i => StateKey(profile.Rules.Single(r => r.Id == i.RuleId), i.RelativePath), i => i.LocalHash!, StringComparer.OrdinalIgnoreCase));
         return backupRoot;
