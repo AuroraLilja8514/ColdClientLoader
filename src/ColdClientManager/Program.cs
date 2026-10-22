@@ -10,6 +10,7 @@ internal static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--record") { Environment.ExitCode = RecordingCommand.RunAsync(args[1..], Storage.DataRoot).GetAwaiter().GetResult(); return; }
         if (args.Length == 2 && args[0] == "--collect") { EtwCollector.Run(args[1]); return; }
         if (args.Length == 2 && args[0] == "--sync")
         {

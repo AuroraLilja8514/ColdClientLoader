@@ -13,6 +13,12 @@ public sealed class GameProfile
     public string LoaderSource { get; set; } = "";
     public string AppId { get; set; } = "";
     public string SteamId { get; set; } = "";
+    public bool SyncAchievements { get; set; }
+    public bool ReportSteamPlaytime { get; set; }
+    public bool RecordGame { get; set; }
+    public string RecordingDirectory { get; set; } = "";
+    public string RecordingFormat { get; set; } = "mkv";
+    public string ObsExecutable { get; set; } = "";
     public List<SyncRule> Rules { get; set; } = [];
     public override string ToString() => Name;
 }

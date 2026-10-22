@@ -28,3 +28,25 @@ ColdClientLoader and emulator components are not included in the application dis
 The user selects their existing components. The locally tested bundle is from:
 https://github.com/Detanup01/gbe_fork/releases/tag/release-2026_09_27
 Its component licenses remain applicable to those separately obtained files.
+
+SteamKit2 3.4.0 (unmodified, dynamically linked):
+https://github.com/SteamRE/SteamKit/tree/3.4.0
+Copyright (C) 2018 Ryan Stecker & SteamRE Team
+GNU Lesser General Public License 2.1; notices and license are in licenses/.
+The corresponding SteamKit2 source is available at the versioned URL above;
+its DLL remains replaceable in the application directory.
+
+SteamKit2 dependencies:
+protobuf-net / protobuf-net.Core 3.2.56, Marc Gravell (Apache-2.0):
+https://github.com/protobuf-net/protobuf-net
+ZstdSharp.Port 0.8.7, Copyright Oleg Stepanischev 2026 (MIT):
+https://github.com/oleg-st/ZstdSharp
+System.IO.Hashing 10.0.1, .NET Foundation and Contributors (MIT).
+Additional license texts are distributed in licenses/.
+
+OBS Studio 32.2.2 is downloaded separately by the recording install command and
+used as an unmodified portable application through obs-websocket 5.x.
+OBS Studio: https://obsproject.com/
+Corresponding source: https://github.com/obsproject/obs-studio/tree/32.2.2
+License: GNU GPL version 2 or later; the official archive retains its notices.
+This repository does not contain OBS binaries or private OBS configurations.

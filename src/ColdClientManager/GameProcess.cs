@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -43,6 +44,12 @@ public sealed class GameProcess : IDisposable
         if (ResumeThread(thread) == uint.MaxValue) throw new Win32Exception();
         resumed = true;
     }
+    public bool ContainsProcess(Process candidate)
+    {
+        if (candidate.HasExited) return false;
+        if (!IsProcessInJob(candidate.SafeHandle, job, out bool contains)) throw new Win32Exception();
+        return contains;
+    }
     public async Task<int> WaitAsync()
     {
         while (true)
@@ -75,6 +82,7 @@ public sealed class GameProcess : IDisposable
     }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern SafeFileHandle CreateJobObjectW(IntPtr security, string? name);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(SafeFileHandle job, SafeFileHandle process);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job, out bool result);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessW(string app, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes, bool inherit, uint flags, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo info);
     [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(SafeFileHandle thread);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool QueryInformationJobObject(SafeFileHandle job, int kind, out Accounting info, int length, IntPtr returned);

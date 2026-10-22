@@ -35,9 +35,9 @@ public sealed class ConflictForm : Form
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), RowCount = 3, ColumnCount = 1 };
         layout.RowStyles.Add(new(SizeType.Absolute, 48)); layout.RowStyles.Add(new(SizeType.Percent, 100)); layout.RowStyles.Add(new(SizeType.Absolute, 40));
         layout.Controls.Add(new Label { Text = "两边内容不同，且无法确定哪份应保留。选择后的内容会复制到另一侧；被覆盖的文件会先备份。取消将停止本次启动 / 同步。", Dock = DockStyle.Fill }, 0, 0);
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "本系统文件", Name = "local", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "共享 / 另一系统文件", Name = "shared", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewComboBoxColumn { HeaderText = "保留内容", Name = "choice", Width = 145, DataSource = new[] { "请选择", "本系统", "共享 / 另一系统" } });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "本地文件", Name = "local", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "同步目标文件", Name = "shared", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewComboBoxColumn { HeaderText = "保留内容", Name = "choice", Width = 145, DataSource = new[] { "请选择", "本地", "同步目标" } });
         foreach (var item in conflicts)
         {
             var rule = profile.Rules.Single(r => r.Id == item.RuleId);
@@ -50,7 +50,7 @@ public sealed class ConflictForm : Form
         ok.Click += (_, _) => {
             grid.EndEdit();
             if (grid.Rows.Cast<DataGridViewRow>().Any(r => (string?)r.Cells[2].Value == "请选择")) { MessageBox.Show(this, "请为每个冲突选择保留的一侧。"); return; }
-            for (int i = 0; i < conflicts.Count; i++) conflicts[i].Action = (string?)grid.Rows[i].Cells[2].Value == "本系统" ? "Local" : "Shared";
+            for (int i = 0; i < conflicts.Count; i++) conflicts[i].Action = (string?)grid.Rows[i].Cells[2].Value == "本地" ? "Local" : "Shared";
             DialogResult = DialogResult.OK;
         };
         buttons.Controls.Add(ok); buttons.Controls.Add(new Button { Text = "取消", AutoSize = true, DialogResult = DialogResult.Cancel });

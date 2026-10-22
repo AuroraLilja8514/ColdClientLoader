@@ -5,7 +5,7 @@ using System.Security.Principal;
 using System.Text.Json;
 using ColdClientManager;
 
-internal static class Tests
+internal static partial class Tests
 {
     static readonly List<string> passed = [];
     static void Assert(bool condition, string name) { if (!condition) throw new Exception("FAIL: " + name); passed.Add(name); Console.WriteLine("PASS: " + name); }
@@ -25,59 +25,71 @@ internal static class Tests
         Directory.CreateDirectory(root);
         try
         {
+            if (args.Contains("--steam-login"))
+            {
+                Application.EnableVisualStyles();
+                var session = SteamLoginForm.SignIn(null, Storage.DataRoot);
+                Assert(session.SteamId != 0 && File.Exists(SteamSession.LoginPath(Storage.DataRoot)), "Steam login and encrypted persistent session");
+                session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--steam-read"))
+            {
+                TestSteamRead(root).GetAwaiter().GetResult();
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--steam-playtime"))
+            {
+                TestSteamPlaytime(root, mock).GetAwaiter().GetResult();
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--steam-launch"))
+            {
+                TestSteamLaunch(root, mock, args.Contains("--loader") ? args[Array.IndexOf(args, "--loader") + 1] : null);
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--launch-modes"))
+            {
+                TestLaunchModes(root, mock);
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--steam-status"))
+            {
+                TestSteamPlayingInterruption(root, mock).GetAwaiter().GetResult();
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--steam-live"))
+            {
+                bool failAfterUpload = args.Contains("--fail-after-upload");
+                try
+                {
+                    TestSteamLive(root, mock, args[Array.IndexOf(args, "--loader") + 1], args[Array.IndexOf(args, "--steam-api") + 1], failAfterUpload).GetAwaiter().GetResult();
+                    if (failAfterUpload) throw new Exception("FAIL: the achievement fixture did not simulate failure");
+                }
+                catch (IOException ex) when (failAfterUpload && ex.Message == "Intentional achievement fixture failure.")
+                {
+                    Assert(File.Exists(Path.Combine(root, "spacewar-cleanup.json")), "simulated failure still completes server and local achievement cleanup");
+                }
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
+                return 0;
+            }
             if (args.Contains("--recover"))
             {
                 string path = args[Array.IndexOf(args, "--recover") + 1];
                 LoaderRegistry.Recover(path);
                 Assert(!File.Exists(Path.Combine(path, "loader-registry-recovery.json")), "sandbox-failed loader test recovery completed");
             }
-            if (args.Contains("--ui"))
-            {
-                Application.SetHighDpiMode(HighDpiMode.SystemAware);
-                Application.EnableVisualStyles();
-                string uiRoot = Path.Combine(root, "ui");
-                Storage.Write(Path.Combine(uiRoot, "profiles.json"), new[] { new GameProfile { Name = "模拟游戏 · 双系统存档", Executable = mock,
-                    Rules = [new SyncRule { LocalPath = @"C:\Users\玩家\AppData\Roaming\游戏\saves", SharedPath = @"E:\GameSaves\游戏\saves", Patterns = "*.sav;*.dat" }] }, new GameProfile { Name = "第二个配置" } });
-                using var form = new MainForm(uiRoot);
-                form.Show(); Application.DoEvents();
-                IEnumerable<Control> Descendants(Control parent)
-                {
-                    foreach (Control child in parent.Controls)
-                    {
-                        yield return child;
-                        foreach (var nested in Descendants(child)) yield return nested;
-                    }
-                }
-                var nameBox = Descendants(form).OfType<TextBox>().Single(t => t.Text == "模拟游戏 · 双系统存档");
-                var gameList = Descendants(form).OfType<ComboBox>().Single(c => c.Items.Count > 0 && c.Items[0] is GameProfile);
-                nameBox.Text = "模拟游戏 · 已保存修改"; gameList.SelectedIndex = 1;
-                Assert(Storage.Read<List<GameProfile>>(Path.Combine(uiRoot, "profiles.json"))[0].Name == "模拟游戏 · 已保存修改", "switching game profiles preserves edits to previous profile");
-                gameList.SelectedIndex = 0;
-                Assert(gameList.Text == "模拟游戏 · 已保存修改", "saved game name refreshes in the game selector");
-                using var bitmap = new Bitmap(form.Width, form.Height);
-                form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
-                bitmap.Save(Path.Combine(root, "ui-preview.png")); form.Close();
-                Assert(true, "WinForms form creation and rendering");
-                var sample = new DiscoveryResult { Files = [new(@"C:\Users\玩家\AppData\Roaming\游戏\saves\slot1.sav", 1, true, true, false)] };
-                using var candidate = new CandidateForm(sample);
-                candidate.Show(); Application.DoEvents();
-                var checklist = Descendants(candidate).OfType<CheckedListBox>().Single();
-                Assert(candidate.Selected.Count == 0, "discovered directories are never selected without user approval");
-                checklist.SetItemChecked(0, true);
-                Assert(candidate.Selected.Count == 1 && candidate.Selected[0].Patterns == "*.sav", "user selection carries the approved directory and file filter");
-                using var candidateImage = new Bitmap(candidate.Width, candidate.Height);
-                candidate.DrawToBitmap(candidateImage, new Rectangle(Point.Empty, candidate.Size)); candidateImage.Save(Path.Combine(root, "candidates-preview.png")); candidate.Close();
-                var conflictProfile = Storage.Read<List<GameProfile>>(Path.Combine(uiRoot, "profiles.json"))[0];
-                using var conflict = new ConflictForm(conflictProfile, new SyncPlan { Items = [new SyncItem { RuleId = conflictProfile.Rules[0].Id, RelativePath = "slot1.sav", LocalHash = "a", SharedHash = "b", Action = "Conflict" }] });
-                conflict.Show(); Application.DoEvents();
-                Assert((string?)Descendants(conflict).OfType<DataGridView>().Single().Rows[0].Cells[2].Value == "请选择", "conflicts have no preselected winning side");
-                using var conflictImage = new Bitmap(conflict.Width, conflict.Height);
-                conflict.DrawToBitmap(conflictImage, new Rectangle(Point.Empty, conflict.Size)); conflictImage.Save(Path.Combine(root, "conflicts-preview.png")); conflict.Close();
-            }
+            if (args.Contains("--ui")) TestLibraryUi(root, mock);
             if (args.Contains("--etw")) TestCapture(root, mock).GetAwaiter().GetResult();
             else if (args.Contains("--cold")) TestRealCold(root, mock, args[Array.IndexOf(args, "--cold") + 1]).GetAwaiter().GetResult();
             else if (args.Contains("--permissions")) TestPermissions(root, args[Array.IndexOf(args, "--permissions") + 1]).GetAwaiter().GetResult();
-            else if (!args.Contains("--ui") && !args.Contains("--recover")) { TestSync(root); TestCandidates(); TestColdPreparation(root, mock); TestProcessTree(root, mock).GetAwaiter().GetResult(); }
+            else if (!args.Contains("--ui") && !args.Contains("--recover")) { TestSync(root); TestCandidates(); TestColdPreparation(root, mock); TestAchievements(root); TestRecordingOptions(root); TestProcessTree(root, mock).GetAwaiter().GetResult(); }
             Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
             return 0;
         }
@@ -192,6 +204,9 @@ internal static class Tests
     {
         string fixture = Path.Combine(root, "process-tree");
         using var game = new GameProcess(mock, "root \"" + fixture + "\"", Path.GetDirectoryName(mock)!);
+        using var rootProcess = Process.GetProcessById(game.Id);
+        using var currentProcess = Process.GetCurrentProcess();
+        Assert(game.ContainsProcess(rootProcess) && !game.ContainsProcess(currentProcess), "recording can restrict window discovery to the launched game job");
         var watch = Stopwatch.StartNew(); game.Resume(); int exit = await game.WaitAsync();
         Assert(exit == 0 && watch.ElapsedMilliseconds >= 1400, "job waits for grandchild after root and child have exited");
         Assert(File.ReadAllText(Path.Combine(fixture, "profile", "saves", "slot1.sav")) == "grandchild-final", "late grandchild write captured before post-sync");
