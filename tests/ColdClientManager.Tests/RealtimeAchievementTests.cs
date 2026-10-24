@@ -55,11 +55,18 @@ internal static partial class Tests
                             }
                         }
                         await Until(() => File.Exists(Path.Combine(fixture, "achievement-ready.txt")));
-                        using (var writer = new FileStream(output, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+                        using (var writer = new FileStream(output, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
                         {
                             await Task.Delay(3500);
                             Assert(!log.Text.Contains("实时成就同步已停止"), "an emulator save lock does not stop realtime monitoring");
                         }
+                        using (var writer = new FileStream(output, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+                        {
+                            writer.WriteByte((byte)'{'); writer.Flush(true);
+                            for (int i = 0; i < 12; i++) { writer.WriteByte((byte)' '); writer.Flush(true); await Task.Delay(200); }
+                            writer.Position = 0; writer.SetLength(0); writer.Write(original); writer.Flush(true);
+                        }
+                        Assert(!log.Text.Contains("实时成就同步已停止"), "an incomplete JSON record is allowed to finish while the emulator keeps writing");
                         Write(Path.Combine(fixture, "achievement-unlock.txt"), "unlock");
                         await Until(() => File.Exists(Path.Combine(fixture, "achievement-earned.txt")));
                         byte[] earned = File.ReadAllBytes(output);

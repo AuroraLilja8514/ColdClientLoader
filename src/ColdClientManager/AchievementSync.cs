@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using SteamKit2;
 using SteamKit2.Internal;
@@ -153,17 +154,25 @@ public static class AchievementSync
     {
         uint appId = ValidateProfile(profile, dataRoot, session.SteamId);
         string output = OutputFile(profile, dataRoot);
-        string? previous = null;
+        string? previous = null, incomplete = null;
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
             string text;
-            try { text = File.ReadAllText(output); }
+            try
+            {
+                using var input = new FileStream(output, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(input);
+                text = reader.ReadToEnd();
+            }
             catch (FileNotFoundException) { continue; }
             // The emulator can replace the file or hold it open while saving. Try on the next tick.
             catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33) { continue; }
-            if (text == previous) continue;
-            var local = JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("本地 achievements.json 必须是成就记录对象。");
+            if (text == previous) { incomplete = null; continue; }
+            JsonObject local;
+            try { local = JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("本地 achievements.json 必须是成就记录对象。"); }
+            catch (JsonException) when (text != incomplete) { incomplete = text; continue; }
+            incomplete = null;
             var remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);
             var schema = ReadSchema(remote);
             var upload = BuildUpload(schema, remote, local);
