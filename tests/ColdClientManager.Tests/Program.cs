@@ -79,6 +79,12 @@ internal static partial class Tests
                 Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
                 return 0;
             }
+            if (args.Contains("--steam-realtime"))
+            {
+                TestRealtimeAchievementLaunch(root, mock, args[Array.IndexOf(args, "--loader") + 1], args[Array.IndexOf(args, "--steam-api") + 1], args.Contains("--corrupt-during-play"));
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
+                return 0;
+            }
             if (args.Contains("--recover"))
             {
                 string path = args[Array.IndexOf(args, "--recover") + 1];

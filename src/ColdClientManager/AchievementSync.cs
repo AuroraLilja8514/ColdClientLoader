@@ -132,16 +132,9 @@ public static class AchievementSync
         }
     }
 
-    public static async Task<AchievementSyncResult> SynchronizeAsync(GameProfile profile, string dataRoot, SteamSession session)
+    static async Task<CMsgClientGetUserStatsResponse> StoreRemoteAsync(SteamSession session, uint appId,
+        CMsgClientGetUserStatsResponse remote, Dictionary<uint, uint> upload)
     {
-        uint appId = ValidateProfile(profile, dataRoot, session.SteamId);
-        var remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);
-        var schema = ReadSchema(remote);
-        string output = OutputFile(profile, dataRoot);
-        var local = ReadLocal(output);
-        var upload = BuildUpload(schema, remote, local);
-        Storage.Write(AccountFile(profile, dataRoot), new AchievementAccount(appId, session.SteamId));
-        int uploaded = upload.Sum(m => BitOperations.PopCount(m.Value & ~RemoteMask(remote, m.Key)));
         if (upload.Count > 0)
         {
             var stored = (await session.Stats.Store(appId, session.SteamId, remote.crc_stats, upload).ToTask()
@@ -152,6 +145,48 @@ public static class AchievementSync
             if (upload.Any(m => (RemoteMask(remote, m.Key) & m.Value) != m.Value))
                 throw new IOException("重新读取 Steam 后仍有成就未解锁。本地记录已保留，请稍后再次同步。");
         }
+        return remote;
+    }
+
+    public static async Task MonitorAsync(GameProfile profile, string dataRoot, SteamSession session,
+        IProgress<AchievementSyncResult> progress, CancellationToken cancellationToken)
+    {
+        uint appId = ValidateProfile(profile, dataRoot, session.SteamId);
+        string output = OutputFile(profile, dataRoot);
+        string? previous = null;
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        {
+            string text;
+            try { text = File.ReadAllText(output); }
+            catch (FileNotFoundException) { continue; }
+            // The emulator can replace the file or hold it open while saving. Try on the next tick.
+            catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33) { continue; }
+            if (text == previous) continue;
+            var local = JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("本地 achievements.json 必须是成就记录对象。");
+            var remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);
+            var schema = ReadSchema(remote);
+            var upload = BuildUpload(schema, remote, local);
+            int uploaded = upload.Sum(m => BitOperations.PopCount(m.Value & ~RemoteMask(remote, m.Key)));
+            // Finish an in-flight upload before stopping, so the final synchronization cannot race it.
+            remote = await StoreRemoteAsync(session, appId, remote, upload).ConfigureAwait(false);
+            previous = text;
+            if (uploaded > 0) progress.Report(new(uploaded,
+                schema.Achievements.Count(a => (RemoteMask(remote, a.Block) & (1u << a.Bit)) != 0), schema.Achievements.Count));
+        }
+    }
+
+    public static async Task<AchievementSyncResult> SynchronizeAsync(GameProfile profile, string dataRoot, SteamSession session)
+    {
+        uint appId = ValidateProfile(profile, dataRoot, session.SteamId);
+        var remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);
+        var schema = ReadSchema(remote);
+        string output = OutputFile(profile, dataRoot);
+        var local = ReadLocal(output);
+        var upload = BuildUpload(schema, remote, local);
+        Storage.Write(AccountFile(profile, dataRoot), new AchievementAccount(appId, session.SteamId));
+        int uploaded = upload.Sum(m => BitOperations.PopCount(m.Value & ~RemoteMask(remote, m.Key)));
+        remote = await StoreRemoteAsync(session, appId, remote, upload).ConfigureAwait(false);
         MergeLocal(schema, remote, local);
         string settings = Path.Combine(LoaderDirectory(profile, dataRoot), "steam_settings");
         Storage.Write(Path.Combine(settings, "achievements.json"), schema.Achievements.Select(a => a.Configuration).ToArray());

@@ -190,16 +190,24 @@ public sealed class MainForm : Form
         if (synchronizeSaves && !discover && p.Rules.Count == 0 && MessageBox.Show(this, "尚未选择同步目录，本次仅启动游戏。", "没有同步规则", MessageBoxButtons.OKCancel) != DialogResult.OK)
             throw new OperationCanceledException();
         if (synchronizeSaves) await SynchronizeAsync(false, SyncDirection.TargetToLocal);
-        await using var steam = p.ReportSteamPlaytime
+        await using var steam = p.ReportSteamPlaytime || p.SyncAchievements
             ? (File.Exists(SteamSession.LoginPath(dataRoot)) ? await SteamSession.ConnectAsync(dataRoot) : SteamLoginForm.SignIn(this, dataRoot)) : null;
-        if (p.SyncAchievements)
-        {
-            if (steam != null) await SynchronizeAchievementsAsync(p, steam);
-            else await SynchronizeAchievementsAsync();
-        }
+        if (p.SyncAchievements) await SynchronizeAchievementsAsync(p, steam!);
         DiscoveryCapture? capture = null; LoaderRegistry? registry = null; DiscoveryResult? result = null;
         int exitCode = 0; bool exited = false, reported = false; string? recording = null;
         var errors = new List<Exception>();
+        using var achievementStop = new CancellationTokenSource();
+        Task? achievements = null;
+        async Task MonitorAchievementsAsync()
+        {
+            try
+            {
+                await AchievementSync.MonitorAsync(p, dataRoot, steam!, new Progress<AchievementSyncResult>(result =>
+                    Log($"Steam 实时成就同步：新上传 {result.Uploaded} 项；Steam 已解锁 {result.Unlocked}/{result.Total}。")), achievementStop.Token);
+            }
+            catch (OperationCanceledException) when (achievementStop.IsCancellationRequested) { }
+            catch (Exception ex) { errors.Add(ex); Log("Steam 实时成就同步已停止：" + ex.Message + " 本地记录保留，退出游戏后再次同步。"); }
+        }
         try
         {
             if (discover)
@@ -217,6 +225,7 @@ public sealed class MainForm : Form
             if (capture != null) await capture.AttachAsync(game.Id);
             if (p.ReportSteamPlaytime) { await steam!.StartPlayingAsync(p, game.Id); reported = true; }
             game.Resume();
+            if (p.SyncAchievements) { achievements = MonitorAchievementsAsync(); Log("Steam 实时成就同步已开启，每两秒检查本地新解锁记录。"); }
             Log($"已启动 {p.Name}。正在等待整个进程树退出…");
             if (p.ReportSteamPlaytime) Log("Steam 已确认正在游玩；连接保持期间上报游玩时长。");
             if (p.RecordGame)
@@ -242,6 +251,8 @@ public sealed class MainForm : Form
         catch (Exception ex) { errors.Add(ex); }
         finally
         {
+            achievementStop.Cancel();
+            if (achievements != null) await achievements;
             if (p.ReportSteamPlaytime)
             {
                 try { await steam!.StopPlayingAsync(); if (reported) Log("Steam 已确认结束游玩状态。"); }
@@ -265,8 +276,7 @@ public sealed class MainForm : Form
         {
             try
             {
-                if (steam != null) await SynchronizeAchievementsAsync(p, steam);
-                else await SynchronizeAchievementsAsync();
+                await SynchronizeAchievementsAsync(p, steam!);
             }
             catch (Exception ex) { errors.Add(ex); }
         }

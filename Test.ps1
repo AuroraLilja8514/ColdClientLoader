@@ -44,6 +44,10 @@ if ($SteamAchievements) {
     if ($LASTEXITCODE -ne 0) { throw 'Spacewar 成就同步测试失败，请检查测试报告。' }
     & $runner (Join-Path $output 'steam-spacewar-failure') $mock --steam-live --loader $ColdLoader --steam-api $SteamApi --fail-after-upload
     if ($LASTEXITCODE -ne 0) { throw 'Spacewar 成就测试异常后的清理失败，请检查测试报告。' }
+    & $runner (Join-Path $output 'steam-realtime') $mock --steam-realtime --loader $ColdLoader --steam-api $SteamApi
+    if ($LASTEXITCODE -ne 0) { throw 'Spacewar 实时成就同步测试失败，请检查测试报告。' }
+    & $runner (Join-Path $output 'steam-realtime-error') $mock --steam-realtime --loader $ColdLoader --steam-api $SteamApi --corrupt-during-play
+    if ($LASTEXITCODE -ne 0) { throw 'Spacewar 实时成就异常处理或测试清理失败，请检查测试报告。' }
 }
 if ($SteamPlaytime) {
     & $runner (Join-Path $output 'steam-status') $mock --steam-status

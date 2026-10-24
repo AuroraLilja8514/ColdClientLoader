@@ -34,15 +34,30 @@ switch (role)
         Thread.Sleep(15000);
         break;
     case "steam-achievement":
+    case "steam-achievement-realtime":
         if (!SteamApi.Init()) return 10;
         try
         {
             IntPtr stats = SteamApi.UserStats();
             if (!SteamApi.RequestCurrentStats(stats)) return 11;
             for (int i = 0; i < 20; i++) { SteamApi.RunCallbacks(); Thread.Sleep(20); }
-            if (!SteamApi.SetAchievement(stats, root)) return 12;
+            bool realtime = role == "steam-achievement-realtime";
+            if (realtime)
+            {
+                Write("achievement-ready.txt", "ready");
+                for (int i = 0; i < 5000 && !File.Exists(Path.Combine(root, "achievement-unlock.txt")); i++) { SteamApi.RunCallbacks(); Thread.Sleep(20); }
+                if (!File.Exists(Path.Combine(root, "achievement-unlock.txt"))) return 14;
+            }
+            string achievement = realtime ? File.ReadAllText(Path.Combine(root, "achievement-name.txt")) : root;
+            if (!SteamApi.SetAchievement(stats, achievement)) return 12;
             if (!SteamApi.StoreStats(stats)) return 13;
             for (int i = 0; i < 20; i++) { SteamApi.RunCallbacks(); Thread.Sleep(20); }
+            if (realtime)
+            {
+                Write("achievement-earned.txt", "earned");
+                for (int i = 0; i < 5000 && !File.Exists(Path.Combine(root, "achievement-release.txt")); i++) { SteamApi.RunCallbacks(); Thread.Sleep(20); }
+                if (!File.Exists(Path.Combine(root, "achievement-release.txt"))) return 15;
+            }
         }
         finally { SteamApi.Shutdown(); }
         break;

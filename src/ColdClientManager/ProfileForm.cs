@@ -7,7 +7,7 @@ public sealed class ProfileForm : Form
 {
     readonly TextBox name = new(), executable = new(), working = new(), arguments = new(), loader = new(), appId = new(), steamId = new();
     readonly ComboBox mode = new() { DropDownStyle = ComboBoxStyle.DropDownList };
-    readonly CheckBox syncAchievements = new() { Text = "游玩前后同步 Steam 成就", AutoSize = true, Margin = new Padding(4, 8, 16, 0) };
+    readonly CheckBox syncAchievements = new() { Text = "自动同步 Steam 成就（含实时）", AutoSize = true, Margin = new Padding(4, 8, 16, 0) };
     readonly CheckBox reportSteamPlaytime = new() { Text = "上报 Steam 状态与时长", AutoSize = true, Margin = new Padding(4, 8, 0, 0) };
     readonly CheckBox recordGame = new() { Text = "启动时用 OBS 录制（720p / 30 帧）", AutoSize = true };
     readonly ComboBox recordingFormat = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 95 };
