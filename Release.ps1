@@ -13,7 +13,7 @@ foreach ($name in @('ColdClientManager', 'ColdClientManager.Cli')) {
     dotnet publish $project -c Release -r win-x64 --self-contained true -o $destination --nologo "-p:Version=$Version" "-p:RuntimeFrameworkVersion=$runtimeVersion" -p:DebugType=None -p:DebugSymbols=false
     if ($LASTEXITCODE -ne 0) { throw "$name 发布构建失败。" }
 }
-foreach ($file in @('README.txt', 'THIRD-PARTY-NOTICES.txt', 'Record-Game.ps1')) {
+foreach ($file in @('README.md', 'THIRD-PARTY-NOTICES.txt', 'Record-Game.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $destination
 }
 $packageRoot = dotnet msbuild $project -nologo -getProperty:NuGetPackageRoot
