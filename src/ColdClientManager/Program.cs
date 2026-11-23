@@ -27,9 +27,9 @@ internal static class Program
             return;
         }
         ApplicationConfiguration.Initialize();
-        using var singleton = new Mutex(true, @"Local\ColdClientManager-" + Environment.UserName, out bool created);
+        using var singleton = new Mutex(true, Storage.InstanceMutex, out bool created);
         if (!created) { MessageBox.Show("应用已经在运行。", "存档同步"); return; }
-        try { Application.Run(new MainForm(Storage.DataRoot)); }
+        try { Application.Run(new MainForm(Storage.DataRoot, args is ["--import", var directory] ? directory : null)); }
         catch (Exception ex) { MessageBox.Show(ex.ToString(), "存档同步：发生错误", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 

@@ -243,4 +243,7 @@ finally {
 Write-Host "候选路径报告：$reportPath"
 if ($runFailure) { throw $runFailure }
 if ($cleanupFailure) { throw $cleanupFailure }
-$report.CandidateDirectories | Format-Table -AutoSize
+foreach ($directory in $report.CandidateDirectories) {
+    Write-Host ("候选目录（{0} 个文件）" -f $directory.FileCount)
+    $directory.Path
+}

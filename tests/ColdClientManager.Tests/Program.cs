@@ -40,6 +40,12 @@ internal static partial class Tests
                 Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
                 return 0;
             }
+            if (args.Contains("--steam-cloud-live"))
+            {
+                TestSteamCloudLive(root, mock).GetAwaiter().GetResult();
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
             if (args.Contains("--steam-playtime"))
             {
                 TestSteamPlaytime(root, mock).GetAwaiter().GetResult();
@@ -55,6 +61,13 @@ internal static partial class Tests
             if (args.Contains("--launch-modes"))
             {
                 TestLaunchModes(root, mock);
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
+            if (args.Contains("--steam-import-read") || args.Contains("--import-trace"))
+            {
+                if (args.Contains("--import-trace")) TestImportUi(root, mock, "trace");
+                else TestSteamImportRead(root, Path.GetFullPath(args[Array.IndexOf(args, "--steam-import-read") + 1])).GetAwaiter().GetResult();
                 Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
                 return 0;
             }
@@ -85,6 +98,12 @@ internal static partial class Tests
                 Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
                 return 0;
             }
+            if (args.Contains("--steam-achievement-reconnect"))
+            {
+                TestSteamAchievementReconnect(root).GetAwaiter().GetResult();
+                Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, Tests = passed });
+                return 0;
+            }
             if (args.Contains("--recover"))
             {
                 string path = args[Array.IndexOf(args, "--recover") + 1];
@@ -95,7 +114,7 @@ internal static partial class Tests
             if (args.Contains("--etw")) TestCapture(root, mock).GetAwaiter().GetResult();
             else if (args.Contains("--cold")) TestRealCold(root, mock, args[Array.IndexOf(args, "--cold") + 1]).GetAwaiter().GetResult();
             else if (args.Contains("--permissions")) TestPermissions(root, args[Array.IndexOf(args, "--permissions") + 1]).GetAwaiter().GetResult();
-            else if (!args.Contains("--ui") && !args.Contains("--recover")) { TestSync(root); TestDirectionalSync(root); TestCandidates(); TestColdPreparation(root, mock); TestAchievements(root); TestRecordingOptions(root); TestProcessTree(root, mock).GetAwaiter().GetResult(); }
+            else if (!args.Contains("--ui") && !args.Contains("--recover")) { TestSync(root); TestDirectionalSync(root); TestCandidates(); TestColdPreparation(root, mock); TestAchievements(root); TestRecordingOptions(root); TestSteamCloud(root); TestSteamImport(root, mock).GetAwaiter().GetResult(); TestProcessTree(root, mock).GetAwaiter().GetResult(); }
             Storage.Write(Path.Combine(root, "test-results.json"), new { Success = true, TimeUtc = DateTime.UtcNow, Tests = passed });
             return 0;
         }

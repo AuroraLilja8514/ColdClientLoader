@@ -28,7 +28,7 @@ public static class SyncEngine
     static bool ContainsPath(string parent, string child) => child.Equals(parent, StringComparison.OrdinalIgnoreCase)
         || child.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
-    public static void Validate(GameProfile profile)
+    public static void Validate(GameProfile profile, bool checkLinks = true)
     {
         if (!Guid.TryParseExact(profile.Id, "N", out _) || profile.Rules.Any(r => !Guid.TryParseExact(r.Id, "N", out _))
             || profile.Rules.Select(r => r.Id).Distinct().Count() != profile.Rules.Count)
@@ -52,13 +52,13 @@ public static class SyncEngine
                     throw new InvalidDataException("请选择具体游戏的存档路径，不能同步整个磁盘、用户目录或系统目录。");
                 if (paths.Any(p => ContainsPath(p, path) || ContainsPath(path, p)))
                     throw new InvalidDataException("同步路径不能相同、互相包含或与其他规则重叠。");
-                RejectLinks(path);
+                if (checkLinks) RejectLinks(path);
                 paths.Add(path);
             }
         }
     }
 
-    static void RejectLinks(string path)
+    internal static void RejectLinks(string path)
     {
         for (string? current = path; current != null; current = Path.GetDirectoryName(current))
         {
@@ -107,9 +107,11 @@ public static class SyncEngine
             foreach (string path in Directory.EnumerateFileSystemEntries(directory))
             {
                 var attr = File.GetAttributes(path);
+                if (!rule.Recursive && (attr & FileAttributes.Directory) != 0) continue;
                 if ((attr & FileAttributes.ReparsePoint) != 0) throw new IOException("存档目录包含链接，请改为更精确的规则：" + path);
                 if ((attr & FileAttributes.Directory) != 0) Walk(path);
-                else if (patterns.Any(p => FileSystemName.MatchesSimpleExpression(p, Path.GetFileName(path), true)))
+                else if (!(rule.SkipSteamCloudMarker && Path.GetFileName(path).Equals("steam_autocloud.vdf", StringComparison.OrdinalIgnoreCase))
+                    && patterns.Any(p => FileSystemName.MatchesSimpleExpression(p, Path.GetFileName(path), true)))
                     result[Path.GetRelativePath(root, path)] = Hash(path);
             }
         }
@@ -117,7 +119,7 @@ public static class SyncEngine
         return result;
     }
 
-    static string StatePath(GameProfile profile, string dataRoot) => Path.Combine(Storage.ProfileFolder(dataRoot, profile), "baseline.json");
+    static string StatePath(GameProfile profile, string dataRoot) => Path.Combine(Storage.ProfileFolder(dataRoot, profile), profile.UseSteamCloud ? "cloud-baseline.json" : "baseline.json");
     static string StateKey(SyncRule rule, string relative) => rule.Id + "|" + Normalize(rule.LocalPath).ToUpperInvariant()
         + "|" + Normalize(rule.SharedPath).ToUpperInvariant() + "|" + rule.SingleFile + "|" + rule.Patterns.ToUpperInvariant() + "|" + relative;
     public static SyncPlan Plan(GameProfile profile, string dataRoot, SyncDirection direction = SyncDirection.Both)
@@ -163,7 +165,7 @@ public static class SyncEngine
         return full;
     }
 
-    public static string Apply(GameProfile profile, string dataRoot, SyncPlan plan)
+    public static string Apply(GameProfile profile, string dataRoot, SyncPlan plan, bool saveBaseline = true)
     {
         // Rebuild from the filesystem: a saved/elevated request must not authorize stale or arbitrary paths.
         var current = Plan(profile, dataRoot, plan.Direction);
@@ -215,7 +217,7 @@ public static class SyncEngine
         }
         var next = Plan(profile, dataRoot, plan.Direction);
         if (next.Items.Any(i => i.Action != "Equal")) throw new IOException("同步期间文件再次变化；已保留备份，请重新同步。");
-        Storage.Write(StatePath(profile, dataRoot), next.Items.ToDictionary(i => StateKey(profile.Rules.Single(r => r.Id == i.RuleId), i.RelativePath), i => i.LocalHash!, StringComparer.OrdinalIgnoreCase));
+        if (saveBaseline) Storage.Write(StatePath(profile, dataRoot), next.Items.ToDictionary(i => StateKey(profile.Rules.Single(r => r.Id == i.RuleId), i.RelativePath), i => i.LocalHash!, StringComparer.OrdinalIgnoreCase));
         return backupRoot;
     }
 }

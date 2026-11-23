@@ -5,6 +5,53 @@ using ColdClientManager;
 
 internal static partial class Tests
 {
+    static async Task TestSteamAchievementReconnect(string root)
+    {
+        await using var steam = await SteamSession.ConnectAsync(Storage.DataRoot);
+        var profile = new GameProfile { AppId = "480", SteamId = steam.SteamId.ToString(), UseColdClient = true, SyncAchievements = true };
+        var before = await AchievementSync.ReadRemoteAsync(steam, 480);
+        var target = AchievementSync.ReadSchema(before).Achievements.FirstOrDefault(a => (AchievementSync.RemoteMask(before, a.Block) & (1u << a.Bit)) == 0)
+            ?? throw new InvalidOperationException("Spacewar 的全部成就已解锁；测试不会重置账号成就。");
+        await AchievementSync.SynchronizeAsync(profile, root, steam);
+        string path = AchievementSync.OutputFile(profile, root);
+        byte[] original = await File.ReadAllBytesAsync(path);
+        using var stop = new CancellationTokenSource();
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        steam.ConnectionProgress = new Progress<string>(message => { if (message == "Steam 已重新登录。") reconnected.TrySetResult(); });
+        var uploaded = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var monitor = AchievementSync.MonitorAsync(profile, root, steam, new Progress<AchievementSyncResult>(r => uploaded.TrySetResult(r.Uploaded)), stop.Token);
+        try
+        {
+            await using (var offline = new SteamOutage(steam))
+            {
+                var local = AchievementSync.ReadLocal(path);
+                local[target.Name]!["earned"] = true;
+                Storage.Write(path, local);
+                Assert(AchievementSync.ReadLocal(path)[target.Name]!["earned"]!.GetValue<bool>(), "the offline achievement was saved locally");
+                await offline.WaitForRetriesAsync();
+                Assert(!monitor.IsCompleted && !uploaded.Task.IsCompleted, "an offline unlock remains pending with playtime reporting disabled");
+            }
+            await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(90));
+            Assert(true, "the achievement-only session logged back in");
+            var completed = await Task.WhenAny(uploaded.Task, monitor, Task.Delay(TimeSpan.FromSeconds(100)));
+            if (completed == monitor) await monitor;
+            var after = await AchievementSync.ReadRemoteAsync(steam, 480);
+            Assert(AchievementSync.RemoteMask(after, target.Block) == (AchievementSync.RemoteMask(before, target.Block) | (1u << target.Bit)),
+                "Steam readback confirms the offline achievement without clearing previously unlocked bits");
+        }
+        finally
+        {
+            stop.Cancel();
+            try { await monitor; }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            finally
+            {
+                try { await RestoreTestAchievement(steam, target); }
+                finally { await File.WriteAllBytesAsync(path, original); }
+            }
+        }
+    }
+
     static void TestRealtimeAchievementLaunch(string root, string mock, string loader, string steamApi, bool corruptDuringPlay)
     {
         Application.EnableVisualStyles();
@@ -43,7 +90,7 @@ internal static partial class Tests
                     Task? launch = null;
                     try
                     {
-                        launch = (Task)typeof(MainForm).GetMethod("LaunchAsync", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(form, [false, false])!;
+                        launch = (Task)typeof(MainForm).GetMethod("LaunchAsync", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(form, [false, false, null, null])!;
                         async Task Until(Func<bool> ready)
                         {
                             DateTime deadline = DateTime.UtcNow.AddSeconds(40);

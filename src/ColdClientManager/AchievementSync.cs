@@ -28,10 +28,13 @@ public static class AchievementSync
         return appId;
     }
 
-    public static async Task<CMsgClientGetUserStatsResponse> ReadRemoteAsync(SteamSession session, uint appId)
+    public static Task<CMsgClientGetUserStatsResponse> ReadRemoteAsync(SteamSession session, uint appId) =>
+        session.RunConnectedAsync(connection => ReadRemoteAsync(connection, appId));
+
+    static async Task<CMsgClientGetUserStatsResponse> ReadRemoteAsync(SteamConnection session, uint appId)
     {
-        var remote = (await session.Stats.Get(appId, session.SteamId).ToTask().WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false)).Body;
-        if ((EResult)remote.eresult != EResult.OK) throw new IOException($"读取 Steam 成就失败：{(EResult)remote.eresult}。");
+        var remote = (await session.WaitForReplyAsync(session.Stats.Get(appId, session.SteamId).ToTask()).ConfigureAwait(false)).Body;
+        if ((EResult)remote.eresult != EResult.OK) throw SteamConnection.Failure((EResult)remote.eresult, $"读取 Steam 成就失败：{(EResult)remote.eresult}。");
         return remote;
     }
 
@@ -133,15 +136,14 @@ public static class AchievementSync
         }
     }
 
-    static async Task<CMsgClientGetUserStatsResponse> StoreRemoteAsync(SteamSession session, uint appId,
+    static async Task<CMsgClientGetUserStatsResponse> StoreRemoteAsync(SteamConnection session, uint appId,
         CMsgClientGetUserStatsResponse remote, Dictionary<uint, uint> upload)
     {
         if (upload.Count > 0)
         {
-            var stored = (await session.Stats.Store(appId, session.SteamId, remote.crc_stats, upload).ToTask()
-                .WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false)).Body;
+            var stored = (await session.WaitForReplyAsync(session.Stats.Store(appId, session.SteamId, remote.crc_stats, upload).ToTask()).ConfigureAwait(false)).Body;
             if ((EResult)stored.eresult != EResult.OK || stored.stats_out_of_date || stored.stats_failed_validation.Count != 0)
-                throw new IOException($"Steam 未确认全部成就：{(EResult)stored.eresult}；数据过期：{stored.stats_out_of_date}；校验失败：{stored.stats_failed_validation.Count}。本地记录已保留，请稍后再次同步。");
+                throw SteamConnection.Failure((EResult)stored.eresult, $"Steam 未确认全部成就：{(EResult)stored.eresult}；数据过期：{stored.stats_out_of_date}；校验失败：{stored.stats_failed_validation.Count}。本地记录已保留，请稍后再次同步。");
             remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);
             if (upload.Any(m => (RemoteMask(remote, m.Key) & m.Value) != m.Value))
                 throw new IOException("重新读取 Steam 后仍有成就未解锁。本地记录已保留，请稍后再次同步。");
@@ -173,19 +175,24 @@ public static class AchievementSync
             try { local = JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("本地 achievements.json 必须是成就记录对象。"); }
             catch (JsonException) when (text != incomplete) { incomplete = text; continue; }
             incomplete = null;
-            var remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);
-            var schema = ReadSchema(remote);
-            var upload = BuildUpload(schema, remote, local);
-            int uploaded = upload.Sum(m => BitOperations.PopCount(m.Value & ~RemoteMask(remote, m.Key)));
-            // Finish an in-flight upload before stopping, so the final synchronization cannot race it.
-            remote = await StoreRemoteAsync(session, appId, remote, upload).ConfigureAwait(false);
+            var result = await session.RunConnectedAsync(async connection => {
+                var remote = await ReadRemoteAsync(connection, appId).ConfigureAwait(false);
+                var schema = ReadSchema(remote);
+                var upload = BuildUpload(schema, remote, local);
+                int uploaded = upload.Sum(m => BitOperations.PopCount(m.Value & ~RemoteMask(remote, m.Key)));
+                // A lost acknowledgement restarts at the read above, with Steam's current achievement bits and CRC.
+                remote = await StoreRemoteAsync(connection, appId, remote, upload).ConfigureAwait(false);
+                return new AchievementSyncResult(uploaded, schema.Achievements.Count(a => (RemoteMask(remote, a.Block) & (1u << a.Bit)) != 0), schema.Achievements.Count);
+            }, cancellationToken).ConfigureAwait(false);
             previous = text;
-            if (uploaded > 0) progress.Report(new(uploaded,
-                schema.Achievements.Count(a => (RemoteMask(remote, a.Block) & (1u << a.Bit)) != 0), schema.Achievements.Count));
+            if (result.Uploaded > 0) progress.Report(result);
         }
     }
 
-    public static async Task<AchievementSyncResult> SynchronizeAsync(GameProfile profile, string dataRoot, SteamSession session)
+    public static Task<AchievementSyncResult> SynchronizeAsync(GameProfile profile, string dataRoot, SteamSession session, CancellationToken token = default) =>
+        session.RunConnectedAsync(connection => SynchronizeAsync(profile, dataRoot, connection), token);
+
+    static async Task<AchievementSyncResult> SynchronizeAsync(GameProfile profile, string dataRoot, SteamConnection session)
     {
         uint appId = ValidateProfile(profile, dataRoot, session.SteamId);
         var remote = await ReadRemoteAsync(session, appId).ConfigureAwait(false);

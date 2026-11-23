@@ -6,7 +6,8 @@ public sealed class SteamLoginForm : Form, IAuthenticator
 {
     readonly CancellationTokenSource cancel = new();
     readonly TextBox account = new(), password = new() { UseSystemPasswordChar = true }, guard = new() { Enabled = false };
-    readonly Label message = new() { Text = "密码仅用于本次登录；登录成功后保存 Windows 加密令牌。", Dock = DockStyle.Fill };
+    readonly TextBox message = new() { Text = "密码仅用于本次登录；登录成功后保存 Windows 加密令牌。", AccessibleName = "Steam 登录提示",
+        Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = SystemColors.Control };
     readonly Button submit = new() { Text = "登录", AutoSize = true };
     TaskCompletionSource<string>? requestedCode;
     SteamSession? session;

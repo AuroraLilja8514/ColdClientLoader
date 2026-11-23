@@ -1,8 +1,10 @@
 $ErrorActionPreference = 'Stop'
-$project = Join-Path $PSScriptRoot 'src\ColdClientManager\ColdClientManager.csproj'
 $destination = Join-Path $PSScriptRoot 'dist\ColdClientManager'
-dotnet publish $project -c Release -o $destination --nologo
-if ($LASTEXITCODE -ne 0) { throw '构建失败。' }
+foreach ($name in @('ColdClientManager', 'ColdClientManager.Cli')) {
+    $project = Join-Path $PSScriptRoot "src\$name\$name.csproj"
+    dotnet publish $project -c Release -o $destination --nologo
+    if ($LASTEXITCODE -ne 0) { throw "$name 构建失败。" }
+}
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $destination
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES.txt') -Destination $destination
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Record-Game.ps1') -Destination $destination

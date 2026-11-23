@@ -1,8 +1,8 @@
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
 using SteamKit2;
 using SteamKit2.Authentication;
-using SteamKit2.Internal;
 
 namespace ColdClientManager;
 
@@ -11,54 +11,156 @@ public sealed record SteamLogin(string AccountName, string RefreshToken);
 public sealed class SteamSession : IAsyncDisposable
 {
     readonly CancellationTokenSource stop = new();
-    readonly Task callbacks;
-    readonly TaskCompletionSource connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly TaskCompletionSource<SteamUser.LoggedOnCallback> loggedOn = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly TaskCompletionSource playingSessionReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly TaskCompletionSource<Exception> playingInterrupted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    volatile SteamUser.PlayingSessionStateCallback? playingSession;
-    volatile TaskCompletionSource? presenceConfirmed;
-    volatile uint expectedAppId;
-    volatile bool reportingPlaytime;
-    public SteamClient Client { get; }
-    public SteamStatsHandler Stats { get; } = new();
-    public ulong SteamId => Client.SteamID!.ConvertToUInt64();
-    public string AccountName { get; private set; } = "";
-    public Task<Exception> PlayingInterrupted => playingInterrupted.Task;
-    public static string LoginPath(string dataRoot) => Path.Combine(dataRoot, "steam", "login.json");
+    readonly object gate = new();
+    readonly SteamUser.LogOnDetails login;
+    readonly Task recovery;
+    volatile SteamConnection current;
+    TaskCompletionSource<SteamConnection> next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    CancellationTokenSource? playingStop;
+    Task? playing;
+    SteamConnection? playingOn;
+    TaskCompletionSource<Exception> playingInterrupted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    SteamSession()
+    public SteamClient Client => current.Client;
+    public SteamStatsHandler Stats => current.Stats;
+    public ulong SteamId { get; }
+    public string AccountName => login.Username!;
+    public Task<Exception> PlayingInterrupted => playingInterrupted.Task;
+    public IProgress<string>? ConnectionProgress { get; set; }
+
+    SteamSession(SteamConnection connection, SteamUser.LogOnDetails login)
     {
-        Client = new SteamClient(SteamConfiguration.Create(b => b.WithProtocolTypes(ProtocolTypes.WebSocket)));
-        Client.AddHandler(Stats);
-        var manager = new CallbackManager(Client);
-        manager.Subscribe<SteamClient.ConnectedCallback>(_ => connected.TrySetResult());
-        manager.Subscribe<SteamClient.DisconnectedCallback>(_ => {
-            connected.TrySetException(new IOException("Steam 连接已断开。"));
-            loggedOn.TrySetException(new IOException("Steam 登录期间连接已断开。"));
-            FailPlaying(new IOException("Steam 连接已断开，游玩状态和时长上报已中断。"));
-        });
-        manager.Subscribe<SteamUser.LoggedOnCallback>(result => loggedOn.TrySetResult(result));
-        manager.Subscribe<SteamUser.LoggedOffCallback>(result => FailPlaying(new IOException($"Steam 会话已退出：{result.Result}。游玩状态和时长上报已中断。")));
-        manager.Subscribe<SteamUser.PlayingSessionStateCallback>(result => {
-            playingSession = result; playingSessionReady.TrySetResult();
-            if (result.PlayingBlocked && reportingPlaytime)
-                FailPlaying(new IOException($"Steam 账号正在其他客户端游玩 AppID {result.PlayingAppID}，本次时长上报已中断。"));
-        });
-        manager.Subscribe<SteamFriends.PersonaStateCallback>(result => {
-            if (result.FriendID == Client.SteamID && result.StatusFlags.HasFlag(EClientPersonaStateFlag.Status) && result.GameAppID == expectedAppId)
-                presenceConfirmed?.TrySetResult();
-        });
-        callbacks = Task.Run(() => {
-            while (!stop.IsCancellationRequested) manager.RunWaitCallbacks(TimeSpan.FromMilliseconds(100));
-        });
+        current = connection;
+        SteamId = connection.SteamId;
+        this.login = login;
+        recovery = RecoverAsync(connection, stop.Token);
     }
 
-    void FailPlaying(Exception error)
+    public static string LoginPath(string dataRoot) => Path.Combine(dataRoot, "steam", "login.json");
+
+    public static void SaveLogin(string dataRoot, SteamLogin login) => Storage.Write(LoginPath(dataRoot),
+        ProtectedData.Protect(JsonSerializer.SerializeToUtf8Bytes(login), null, DataProtectionScope.CurrentUser));
+
+    public static SteamLogin ReadLogin(string dataRoot) => JsonSerializer.Deserialize<SteamLogin>(
+        ProtectedData.Unprotect(Storage.Read<byte[]>(LoginPath(dataRoot)), null, DataProtectionScope.CurrentUser))!;
+
+    public static async Task<SteamSession> ConnectAsync(string dataRoot, AuthSessionDetails? authentication = null, CancellationToken cancellationToken = default)
     {
-        playingSessionReady.TrySetException(error);
-        presenceConfirmed?.TrySetException(error);
-        if (reportingPlaytime) playingInterrupted.TrySetResult(error);
+        var connection = new SteamConnection(SteamConfiguration.Create(b => b.WithProtocolTypes(ProtocolTypes.WebSocket)));
+        try
+        {
+            await connection.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            SteamLogin saved;
+            bool reuseLogin = File.Exists(LoginPath(dataRoot));
+            if (reuseLogin) saved = ReadLogin(dataRoot);
+            else
+            {
+                if (authentication == null) throw new InvalidOperationException("请先使用“Steam 登录”登录账号。");
+                authentication.IsPersistentSession = true;
+                authentication.DeviceFriendlyName = "ColdClientManager";
+                var auth = await connection.Client.Authentication.BeginAuthSessionViaCredentialsAsync(authentication)
+                    .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+                var result = await auth.PollingWaitForResultAsync(cancellationToken).ConfigureAwait(false);
+                saved = new(result.AccountName, result.RefreshToken);
+            }
+            var details = new SteamUser.LogOnDetails { Username = saved.AccountName, AccessToken = saved.RefreshToken,
+                ShouldRememberPassword = true, LoginID = (uint)RandomNumberGenerator.GetInt32(1, int.MaxValue) };
+            await connection.LogOnAsync(details, cancellationToken).ConfigureAwait(false);
+            if (!reuseLogin) SaveLogin(dataRoot, saved);
+            return new SteamSession(connection, details);
+        }
+        catch
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    async Task RecoverAsync(SteamConnection first, CancellationToken token)
+    {
+        var configuration = first.Client.Configuration;
+        SteamConnection? owned = first;
+        try
+        {
+            while (true)
+            {
+                var reason = await owned.Lost.WaitAsync(token).ConfigureAwait(false);
+                await owned.DisposeAsync().ConfigureAwait(false);
+                owned = null;
+                if (reason is not (SteamNetworkException or SteamTemporaryResultException)) throw reason;
+                ConnectionProgress?.Report("Steam 连接已中断，正在自动重连。");
+                for (int seconds = 1; owned == null; seconds = Math.Min(seconds * 2, 30))
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(seconds), token).ConfigureAwait(false);
+                    var attempt = new SteamConnection(configuration);
+                    try
+                    {
+                        await attempt.ConnectAsync(token).ConfigureAwait(false);
+                        await attempt.LogOnAsync(login, token).ConfigureAwait(false);
+                        if (attempt.SteamId != SteamId) throw new InvalidDataException("重新登录的 Steam 账号与本次会话不一致。");
+                        owned = attempt;
+                    }
+                    catch (Exception ex) when (ex is SteamNetworkException or SteamTemporaryResultException or TimeoutException)
+                    {
+                        await attempt.DisposeAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        await attempt.DisposeAsync().ConfigureAwait(false);
+                        throw;
+                    }
+                }
+                lock (gate)
+                {
+                    current = owned;
+                    next.TrySetResult(owned);
+                    next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+                ConnectionProgress?.Report("Steam 已重新登录。");
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { next.TrySetCanceled(token); }
+        catch (Exception ex)
+        {
+            next.TrySetException(ex);
+            ConnectionProgress?.Report("Steam 无法恢复会话：" + ex.Message);
+        }
+        finally { if (owned != null) await owned.DisposeAsync().ConfigureAwait(false); }
+    }
+
+    static bool RetryRequest(Exception error, SteamConnection connection) => error is SteamNetworkException or TimeoutException or TaskCanceledException
+        || error is AsyncJobFailedException && !connection.IsOnline
+        || error is HttpRequestException { HttpRequestError: HttpRequestError.ConnectionError or HttpRequestError.NameResolutionError or HttpRequestError.ResponseEnded };
+
+    // Retry a whole operation on one authenticated connection. Callers that write first read the server's current state.
+    internal async Task<T> RunConnectedAsync<T>(Func<SteamConnection, Task<T>> operation, CancellationToken cancellationToken = default)
+    {
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Token);
+        var token = cancel.Token;
+        int serviceDelay = 1;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            Task<SteamConnection> ready;
+            lock (gate) ready = current.IsOnline ? Task.FromResult(current) : next.Task;
+            var connection = await ready.WaitAsync(token);
+            token.ThrowIfCancellationRequested();
+            try { return await operation(connection); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || stop.IsCancellationRequested) { throw; }
+            catch (SteamTemporaryResultException ex)
+            {
+                // Steam answered this request. A new login would restart the session even though the transport works.
+                if (!connection.IsOnline) continue;
+                if (serviceDelay == 1) ConnectionProgress?.Report($"Steam 请求暂未完成（{ex.Result}），将自动重试。");
+                await Task.WhenAny(connection.Lost, Task.Delay(TimeSpan.FromSeconds(serviceDelay), token));
+                serviceDelay = Math.Min(serviceDelay * 2, 30);
+            }
+            catch (Exception ex) when (RetryRequest(ex, connection))
+            {
+                token.ThrowIfCancellationRequested();
+                if (connection.IsOnline) connection.ConnectionLost(new SteamNetworkException("Steam 请求的连接已中断。"));
+            }
+        }
     }
 
     public static uint ValidateProfile(GameProfile profile, ulong steamId)
@@ -69,96 +171,60 @@ public sealed class SteamSession : IAsyncDisposable
         return appId;
     }
 
-    public async Task StartPlayingAsync(GameProfile profile, int processId)
+    public Task<KeyValue> GetAppInfoAsync(uint appId, CancellationToken token = default) =>
+        RunConnectedAsync(c => c.GetAppInfoAsync(appId), token);
+
+    public Task StartPlayingAsync(GameProfile profile, int processId, CancellationToken cancellationToken = default)
     {
         uint appId = ValidateProfile(profile, SteamId);
-        await playingSessionReady.Task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-        if (playingSession!.PlayingBlocked)
-            throw new InvalidOperationException($"Steam 账号正在其他客户端游玩 AppID {playingSession.PlayingAppID}。请先结束该游戏，或取消“上报 Steam 状态与时长”。");
-        reportingPlaytime = true;
-        Client.GetHandler<SteamFriends>()!.SetPersonaState(EPersonaState.Online);
-        await SendPlayingAsync(appId, processId).ConfigureAwait(false);
+        if (playing != null) throw new InvalidOperationException("已有游戏正在上报游玩状态。");
+        playingStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        playingInterrupted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        playing = KeepPlayingAsync(appId, processId, started, playingStop.Token);
+        return started.Task;
     }
 
-    async Task SendPlayingAsync(uint appId, int processId)
+    async Task KeepPlayingAsync(uint appId, int processId, TaskCompletionSource started, CancellationToken token)
     {
-        if (!Client.IsConnected) throw new IOException("Steam 已断开，无法确认游玩状态。");
-        if (playingSession!.PlayingBlocked) throw new IOException("Steam 游玩会话已被其他客户端占用。");
-        var confirmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        expectedAppId = appId; presenceConfirmed = confirmed;
-        var message = new ClientMsgProtobuf<CMsgClientGamesPlayed>(EMsg.ClientGamesPlayedWithDataBlob);
-        message.Body.client_os_type = (uint)EOSType.WinUnknown;
-        if (appId != 0)
-        {
-            var game = new CMsgClientGamesPlayed.GamePlayed { game_id = appId };
-            game.process_id_list.Add(new() { process_id = (uint)processId });
-            message.Body.games_played.Add(game);
-        }
-        Client.Send(message);
-        Client.GetHandler<SteamFriends>()!.RequestFriendInfo(Client.SteamID!, EClientPersonaStateFlag.Status | EClientPersonaStateFlag.GameExtraInfo);
-        try { await confirmed.Task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
-        finally { presenceConfirmed = null; }
-    }
-
-    public async Task StopPlayingAsync()
-    {
-        if (!reportingPlaytime) return;
-        try { await SendPlayingAsync(0, 0).ConfigureAwait(false); }
-        finally { reportingPlaytime = false; }
-    }
-
-    public static async Task<SteamSession> ConnectAsync(string dataRoot, AuthSessionDetails? authentication = null, CancellationToken cancellationToken = default)
-    {
-        var session = new SteamSession();
         try
         {
-            session.Client.Connect();
-            await session.connected.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
-            string path = LoginPath(dataRoot);
-            SteamLogin login;
-            if (File.Exists(path)) login = ReadLogin(dataRoot);
-            else
-            {
-                if (authentication == null) throw new InvalidOperationException("请先使用“Steam 登录”登录账号。");
-                authentication.IsPersistentSession = true;
-                authentication.DeviceFriendlyName = "ColdClientManager";
-                var auth = await session.Client.Authentication.BeginAuthSessionViaCredentialsAsync(authentication)
-                    .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
-                var result = await auth.PollingWaitForResultAsync(cancellationToken).ConfigureAwait(false);
-                login = new(result.AccountName, result.RefreshToken);
-            }
-            session.Client.GetHandler<SteamUser>()!.LogOn(new SteamUser.LogOnDetails {
-                Username = login.AccountName, AccessToken = login.RefreshToken, ShouldRememberPassword = true,
-                LoginID = (uint)RandomNumberGenerator.GetInt32(1, int.MaxValue)
-            });
-            var loggedOn = await session.loggedOn.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
-            if (loggedOn.Result != EResult.OK)
-                throw new IOException($"Steam 登录失败：{loggedOn.Result}。若登录已过期，请先退出保存的 Steam 账号，再重新登录。");
-            session.AccountName = login.AccountName;
-            SaveLogin(dataRoot, login);
-            return session;
+            await RunConnectedAsync<bool>(async connection => {
+                playingOn = connection;
+                await connection.StartPlayingAsync(appId, processId, token).ConfigureAwait(false);
+                if (!started.TrySetResult()) ConnectionProgress?.Report("Steam 已确认恢复正在游玩，继续上报时长。");
+                throw await connection.PlayingInterrupted.WaitAsync(token).ConfigureAwait(false);
+            }, token).ConfigureAwait(false);
         }
-        catch
-        {
-            await session.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { started.TrySetCanceled(token); }
+        catch (Exception ex) { started.TrySetException(ex); playingInterrupted.TrySetResult(ex); }
     }
 
-    public static void SaveLogin(string dataRoot, SteamLogin login) => Storage.Write(LoginPath(dataRoot),
-        ProtectedData.Protect(JsonSerializer.SerializeToUtf8Bytes(login), null, DataProtectionScope.CurrentUser));
-
-    public static SteamLogin ReadLogin(string dataRoot) => JsonSerializer.Deserialize<SteamLogin>(
-        ProtectedData.Unprotect(Storage.Read<byte[]>(LoginPath(dataRoot)), null, DataProtectionScope.CurrentUser))!;
+    public async Task<bool> StopPlayingAsync()
+    {
+        if (playing == null) return false;
+        playingStop!.Cancel();
+        await playing.ConfigureAwait(false);
+        playing = null;
+        playingStop.Dispose();
+        var connection = playingOn;
+        playingOn = null;
+        if (connection == null) return false;
+        try { return await connection.StopPlayingAsync().ConfigureAwait(false); }
+        catch (Exception ex) when (RetryRequest(ex, connection))
+        {
+            if (connection.IsOnline) connection.ConnectionLost(new SteamNetworkException("Steam 游玩状态连接已中断。"));
+            return false;
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
         try { await StopPlayingAsync().ConfigureAwait(false); }
         finally
         {
-            Client.Disconnect();
             stop.Cancel();
-            await callbacks.ConfigureAwait(false);
+            await recovery.ConfigureAwait(false);
             stop.Dispose();
         }
     }

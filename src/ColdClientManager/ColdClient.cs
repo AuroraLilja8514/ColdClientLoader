@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Win32;
+using SteamKit2;
 
 namespace ColdClientManager;
 
@@ -13,15 +13,21 @@ public static class ColdClient
         while (directory.Parent != null && !directory.Name.Equals("common", StringComparison.OrdinalIgnoreCase)) directory = directory.Parent;
         if (directory.Parent == null || !directory.Parent.Name.Equals("steamapps", StringComparison.OrdinalIgnoreCase)) return;
         string gameFolder = Path.GetRelativePath(directory.FullName, profile.Executable).Split(Path.DirectorySeparatorChar)[0];
-        foreach (string file in Directory.EnumerateFiles(directory.Parent.FullName, "appmanifest_*.acf"))
+        ReadSteamManifest(profile, Path.Combine(directory.FullName, gameFolder));
+    }
+
+    internal static void ReadSteamManifest(GameProfile profile, string installDirectory)
+    {
+        var game = new DirectoryInfo(installDirectory);
+        if (game.Parent?.Name.Equals("common", StringComparison.OrdinalIgnoreCase) != true
+            || game.Parent.Parent?.Name.Equals("steamapps", StringComparison.OrdinalIgnoreCase) != true) return;
+        foreach (string file in Directory.EnumerateFiles(game.Parent.Parent.FullName, "appmanifest_*.acf"))
         {
-            var fields = Regex.Matches(File.ReadAllText(file), "\"([^\"]+)\"\\s+\"([^\"]*)\"")
-                .GroupBy(m => m.Groups[1].Value, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First().Groups[2].Value, StringComparer.OrdinalIgnoreCase);
-            if (!fields.TryGetValue("installdir", out string? folder) || !folder.Equals(gameFolder, StringComparison.OrdinalIgnoreCase)) continue;
-            if (fields.TryGetValue("appid", out string? appId)) profile.AppId = appId;
-            if (fields.TryGetValue("LastOwner", out string? owner)) profile.SteamId = owner;
-            if (fields.TryGetValue("name", out string? name)) profile.Name = name;
+            var fields = KeyValue.LoadFromString(File.ReadAllText(file));
+            if (fields?["installdir"].Value?.Equals(game.Name, StringComparison.OrdinalIgnoreCase) != true) continue;
+            if (fields["appid"].Value is { } appId) profile.AppId = appId;
+            if (fields["LastOwner"].Value is { } owner) profile.SteamId = owner;
+            if (fields["name"].Value is { } name) profile.Name = name;
             break;
         }
     }

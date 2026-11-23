@@ -5,6 +5,9 @@ param(
     [switch]$LaunchModes,
     [switch]$SteamAchievements,
     [switch]$SteamPlaytime,
+    [switch]$SteamCloud,
+    [switch]$ImportDiscovery,
+    [string]$SteamImportGame,
     [string]$SteamApi
 )
 $ErrorActionPreference = 'Stop'
@@ -31,6 +34,14 @@ if ($Etw) {
     & $runner (Join-Path $output 'etw') $mock --etw
     if ($LASTEXITCODE -ne 0) { throw 'ETW 测试失败，请检查错误报告或安全软件提示，勿自动重试。' }
 }
+if ($ImportDiscovery) {
+    & $runner (Join-Path $output 'import-first-run') $mock --import-trace
+    if ($LASTEXITCODE -ne 0) { throw '首次游玩、确认候选和导入备份测试失败，请检查测试报告。' }
+}
+if ($SteamImportGame) {
+    & $runner (Join-Path $output 'import-read') $mock --steam-import-read $SteamImportGame
+    if ($LASTEXITCODE -ne 0) { throw '读取已安装游戏的 Steam 启动及存档规则失败。' }
+}
 if ($ColdLoader) {
     & $runner (Join-Path $output 'cold') $mock --cold $ColdLoader
     if ($LASTEXITCODE -ne 0) { throw 'ColdClientLoader 模拟测试失败，请检查错误报告或安全软件提示，勿自动重试。' }
@@ -48,6 +59,8 @@ if ($SteamAchievements) {
     if ($LASTEXITCODE -ne 0) { throw 'Spacewar 实时成就同步测试失败，请检查测试报告。' }
     & $runner (Join-Path $output 'steam-realtime-error') $mock --steam-realtime --loader $ColdLoader --steam-api $SteamApi --corrupt-during-play
     if ($LASTEXITCODE -ne 0) { throw 'Spacewar 实时成就异常处理或测试清理失败，请检查测试报告。' }
+    & $runner (Join-Path $output 'steam-achievement-reconnect') $mock --steam-achievement-reconnect
+    if ($LASTEXITCODE -ne 0) { throw 'Spacewar 断网成就补传或测试清理失败，请检查测试报告。' }
 }
 if ($SteamPlaytime) {
     & $runner (Join-Path $output 'steam-status') $mock --steam-status
@@ -58,5 +71,9 @@ if ($SteamPlaytime) {
     if ($ColdLoader) { $launchArgs = @('--loader', $ColdLoader) }
     & $runner (Join-Path $output 'steam-launch') $mock --steam-launch @launchArgs
     if ($LASTEXITCODE -ne 0) { throw 'Steam 状态与启动流程集成测试失败，请检查测试报告。' }
+}
+if ($SteamCloud) {
+    & $runner (Join-Path $output 'steam-cloud') $mock --steam-cloud-live
+    if ($LASTEXITCODE -ne 0) { throw 'Spacewar 云存档测试或清理失败，请检查测试报告。' }
 }
 Write-Output "测试结果：$output"

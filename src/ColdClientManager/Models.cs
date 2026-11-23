@@ -15,11 +15,13 @@ public sealed class GameProfile
     public string SteamId { get; set; } = "";
     public bool SyncAchievements { get; set; }
     public bool ReportSteamPlaytime { get; set; }
+    public bool UseSteamCloud { get; set; }
     public bool RecordGame { get; set; }
     public string RecordingDirectory { get; set; } = "";
     public string RecordingFormat { get; set; } = "mkv";
     public string ObsExecutable { get; set; } = "";
     public List<SyncRule> Rules { get; set; } = [];
+    public GameProfile Copy() => JsonSerializer.Deserialize<GameProfile>(JsonSerializer.Serialize(this))!;
     public override string ToString() => Name;
 }
 
@@ -29,12 +31,15 @@ public sealed class SyncRule
     public string LocalPath { get; set; } = "";
     public string SharedPath { get; set; } = "";
     public bool SingleFile { get; set; }
+    public bool Recursive { get; set; } = true;
+    public bool SkipSteamCloudMarker { get; set; }
     public string Patterns { get; set; } = "*";
 }
 
 public static class Storage
 {
     public static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    public static string InstanceMutex => @"Local\ColdClientManager-" + Environment.UserName;
     public static string DataRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ColdClientManager");
     public static T Read<T>(string path) => JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json)!;
     public static void Write<T>(string path, T value)

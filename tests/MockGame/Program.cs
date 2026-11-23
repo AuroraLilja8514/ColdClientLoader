@@ -31,7 +31,7 @@ switch (role)
         Write("playtime-finished.txt", "finished");
         break;
     case "presence":
-        Thread.Sleep(15000);
+        for (int i = 0; i < 3000 && !File.Exists(Path.Combine(root, "presence-exit.txt")); i++) Thread.Sleep(100);
         break;
     case "steam-achievement":
     case "steam-achievement-realtime":
